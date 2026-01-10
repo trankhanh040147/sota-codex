@@ -16,8 +16,9 @@ You are acting as a Senior Frontend Architect. Your goal is to balance **Develop
 | **Simple Logic**  | **Vanilla TS**       | For toggles, menus, and intersection observers (< 50 lines). |
 | **State**         | **Nanostores**       | For sharing state between Islands (e.g., Cart, Auth).        |
 | **Data Mutations** | **Astro Actions**    | Type-safe backend functions for forms. No manual API endpoints. |
+| **Content**       | **Content Collections** | File-based content with type-safe queries (`getCollection`, `getEntry`). |
 | **Environment**   | **astro:env**         | Type-safe environment variables with validation.            |
-| **Page Motion**   | **View Transitions** | Native Astro/Browser API for page navigation animations.     |
+| **Page Motion**   | **View Transitions** | Native Astro/Browser API for page navigation animations. Use `<ClientRouter />` (Astro 5). |
 | **Comp. Motion**  | **Framer Motion**    | Complex component gestures/physics inside React Islands.     |
 | **Styling**       | **Tailwind v4**      | Utility-first. Use `cn()` for class merging.                 |
 
@@ -42,13 +43,16 @@ Before choosing `.tsx` or `.astro`, classify the feature:
 - Must check `if (!element) return;`.
 - Must handle `astro:page-load` for View Transitions compatibility.
 - Use `transition:persist` attribute to maintain state during view transitions (e.g., video players, form inputs).
+- Use `transition:persist-props` on islands to preserve props across navigation (Astro 4.5+).
 - **Limit:** If logic exceeds ~50 lines, refactor to **Tier 3 (React)**.
 
-**View Transitions Events:**
+**View Transitions Events & Attributes:**
 
 - `astro:page-load`: Fires after navigation completes. Use for re-initializing scripts.
 - `astro:before-swap`: Fires before DOM swap. Use for preserving theme/state during transitions.
 - `data-astro-rerun`: Attribute to force inline script re-execution on navigation.
+- `data-astro-reload`: Attribute on links to force full-page navigation (disables client router).
+- **Custom swap functions:** Use `swapFunctions` object (Astro 4.15+) for custom transition animations.
 
 ### 2. State Management (Nanostores)
 
@@ -65,30 +69,85 @@ _Use it in Astro Script:_ `isCartOpen.subscribe(...)`
 
 ### 3. Animations Strategy
 
-- **Page Navigation:** Use Astro's `<ViewTransitions />`. Do not use Framer Motion for full-page transitions.
+- **Page Navigation:** Use Astro's `<ClientRouter />` (Astro 5 breaking change - replaces `<ViewTransitions />`). Do not use Framer Motion for full-page transitions.
 - **Complex UI (Tier 3):** Use **Framer Motion** for "layout", "drag", or "enter/exit" animations _inside_ React components.
 
 ### 4. Data & Logic (Astro 5)
 
 - **Mutations:** Use **Astro Actions** (`src/actions/`) for all form submissions and backend logic. Do not write manual API endpoints.
   - **Example:** Contact form, login, signup, newsletter subscription.
-  - **Pattern:**ript
+  - **Pattern:**cript
     // src/actions/contact.ts
-    import { defineAction } from 'astro:actions';
+    import { defineAction, ActionError, isInputError } from 'astro:actions';
+    import { z } from 'zod';
+    
     export const contact = defineAction({
       accept: 'form',  // Required for form data handling
       input: z.object({ email: z.string().email() }),
-      handler: async ({ email }) => { /* ... */ }
+      handler: async ({ email }, { locals }) => {
+        // Security: Always validate auth in handler
+        if (!locals.user) {
+          throw new ActionError({ code: "UNAUTHORIZED" });
+        }
+        
+        // Handle errors
+        try {
+          // ... logic ...
+        } catch (error) {
+          if (isInputError(error)) {
+            throw error; // Re-throw validation errors
+          }
+          throw new ActionError({ code: "INTERNAL_ERROR" });
+        }
+      }
     });
-    - **Environment Variables:** Use `astro:env` for type-safe environment variables.
+      - **Error Handling:**
+    - Use `ActionError({ code: "..." })` for structured errors.
+    - Use `isInputError()` to check validation errors.
+    - Use `.orThrow()` pattern for optional actions.
+  - **Security:** Actions are public endpoints (`/_actions/*`). Always validate auth using `context.locals` in the handler.
+
+- **Environment Variables:** Use `astro:env` for type-safe environment variables.
   - ❌ `process.env.API_KEY` or `import.meta.env.API_KEY`
   - ✅ `import { API_KEY } from 'astro:env/server'`
   - **Configuration:** Define schema in `astro.config.mjs` `env` block.
   - **Validation:** Astro validates at build time and provides autocomplete.
 
-- **Server Islands Caching:** Server Islands support automatic caching via `Cache-Control` headers (GET requests only, props < 2KB). Use for frequently accessed server-rendered content.
+- **Server Islands Caching:** Server Islands support automatic caching via `Cache-Control` headers (GET requests only, props < 2KB). Use `ASTRO_KEY` environment variable for encryption. Use for frequently accessed server-rendered content.
 
+### 5. Content Collections (Astro 5 Content Layer)
+
+- **Configuration:** Define in `src/content.config.ts` using `defineCollection()`.
+- **Loaders:**
+  - Use `glob()` for file-based content (Markdown, MDX).
+  - Use `file()` for JSON/YAML content.
+- **Querying:**
+  - Use `getCollection()` to query collections.
+  - Use `getEntry()` to fetch a single entry.
+  - Use `render(entry)` to render Markdown content.
+- **Important:** `compiledContent()` is **async** in Astro 5 (breaking change).
+- **Client Restriction:** Cannot use `astro:content` on client. Pass content via props to islands.
+
+// src/content.config.ts
+import { defineCollection, z } from 'astro:content';
+
+export const blog = defineCollection({
+  loader: glob('./blog/**/*.md'),
+  schema: z.object({
+    title: z.string(),
+    date: z.date(),
+  }),
+});
+
+// Usage in .astro file
 ---
+import { getCollection } from 'astro:content';
+const posts = await getCollection('blog');
+const entry = await getEntry('blog', 'my-post');
+const { Content } = await entry.render();
+---
+
+<Content />---
 
 ## ⚡ Workflow: The Component-Driven Loop
 
@@ -125,8 +184,11 @@ Before outputting code, verify:
 2. [ ] **Cleanup:** If writing Tier 2 scripts, did I remove event listeners on `astro:before-swap` or use specific cleanup logic?
 3. [ ] **Type Safety:** No `any`. No `// @ts-nocheck`.
 4. [ ] **Styles:** Used `cn()` for conditional classes. No template literal concatenation.
-5. [ ] **View Transitions:** Did I use `data-astro-reload` when full-page navigation is needed? (Disables client router for that link).
-6. [ ] **Conflict Check:** Does this contradict `astro.mdc`? **This file (`AGENTS.md`) is the Source of Truth.**
+5. [ ] **View Transitions:** Did I use `<ClientRouter />` instead of `<ViewTransitions />`? (Astro 5 breaking change).
+6. [ ] **View Transitions Attributes:** Did I use `data-astro-reload` when full-page navigation is needed? Did I use `data-astro-rerun` for inline script re-execution?
+7. [ ] **Actions Security:** Did I validate auth in Action handlers using `context.locals`?
+8. [ ] **Content Collections:** Did I await `compiledContent()` if using it? (Astro 5 async breaking change).
+9. [ ] **Conflict Check:** Does this contradict `astro.mdc`? **This file (`AGENTS.md`) is the Source of Truth.**
 
 ---
 
