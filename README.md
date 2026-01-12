@@ -1,3 +1,6 @@
+---
+feature: thumbnails/external/0d872a50f9d16c5ae493b7ac2c8a2634.svg
+---
 # 📜 sota-codex
 
 > **The Authoritative Standard for AI-Assisted Engineering.**
